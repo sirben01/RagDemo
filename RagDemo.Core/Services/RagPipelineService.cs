@@ -84,6 +84,7 @@ public class RagPipelineService(
     public async IAsyncEnumerable<string> ChatAsync(
         string sessionId,
         string question,
+        IReadOnlyList<ConversationMessage>? history = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var queryVector = await embeddingService.EmbedAsync(question, cancellationToken);
@@ -91,7 +92,7 @@ public class RagPipelineService(
 
         logger.LogInformation("Retrieved {Count} context chunks for question in session {SessionId}", results.Count, sessionId);
 
-        await foreach (var token in anthropicService.StreamAnswerAsync(question, results, cancellationToken))
+        await foreach (var token in anthropicService.StreamAnswerAsync(question, results, history, cancellationToken))
             yield return token;
     }
 }

@@ -1,5 +1,6 @@
 using RagDemo.Core.Interfaces;
 using RagDemo.Core.Services;
+using RagDemo.Core.Services.Extractors;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,6 +38,13 @@ builder.Services.AddHttpClient("crawler", c =>
     c.Timeout = TimeSpan.FromSeconds(15);
     c.DefaultRequestHeaders.Add("User-Agent", "RagDemo/1.0 (web crawler)");
 });
+
+// Content extractors (order matters — first match wins)
+builder.Services.AddSingleton<IContentExtractor, HtmlContentExtractor>();
+builder.Services.AddSingleton<IContentExtractor, PdfContentExtractor>();
+builder.Services.AddSingleton<IContentExtractor, PlainTextExtractor>();
+builder.Services.AddSingleton<IContentExtractor, XmlContentExtractor>();
+builder.Services.AddSingleton<ContentExtractorFactory>();
 
 // Core services
 builder.Services.AddScoped<IWebCrawler, WebCrawler>();

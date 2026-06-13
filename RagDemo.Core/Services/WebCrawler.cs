@@ -3,10 +3,14 @@ using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using RagDemo.Core.Interfaces;
 using RagDemo.Core.Models;
+using RagDemo.Core.Services.Extractors;
 
 namespace RagDemo.Core.Services;
 
-public class WebCrawler(IHttpClientFactory httpClientFactory, ILogger<WebCrawler> logger) : IWebCrawler
+public class WebCrawler(
+    IHttpClientFactory httpClientFactory,
+    ContentExtractorFactory extractorFactory,
+    ILogger<WebCrawler> logger) : IWebCrawler
 {
     private const int MaxDepth = 3;
 
@@ -31,19 +35,36 @@ public class WebCrawler(IHttpClientFactory httpClientFactory, ILogger<WebCrawler
             CrawledPage? page = null;
             try
             {
-                var html = await FetchHtmlAsync(client, url, cancellationToken);
-                if (html is null) continue;
+                var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    logger.LogDebug("Non-success status {Status} for {Url}", response.StatusCode, url);
+                    continue;
+                }
 
-                var doc = new HtmlDocument();
-                doc.LoadHtml(html);
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "text/html";
+                var extractor = extractorFactory.GetExtractor(contentType, url);
 
-                var text = ExtractText(doc);
+                if (extractor is null)
+                {
+                    logger.LogDebug("No extractor for content type {ContentType} at {Url} — skipping", contentType, url);
+                    continue;
+                }
+
+                // Buffer content so we can use it for both extraction and link-following
+                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+
+                using var extractStream = new MemoryStream(bytes);
+                var text = await extractor.ExtractTextAsync(extractStream, url, cancellationToken);
+
                 if (!string.IsNullOrWhiteSpace(text))
                     page = new CrawledPage(url, text, DateTime.UtcNow);
 
-                if (depth < MaxDepth)
+                // Only follow links from HTML pages
+                if (extractor is HtmlContentExtractor && depth < MaxDepth)
                 {
-                    foreach (var link in ExtractLinks(doc, rootUri, url))
+                    using var linkStream = new MemoryStream(bytes);
+                    foreach (var link in ExtractLinks(linkStream, rootUri, url))
                     {
                         if (!visited.Contains(link))
                             queue.Enqueue((link, depth + 1));
@@ -60,44 +81,11 @@ public class WebCrawler(IHttpClientFactory httpClientFactory, ILogger<WebCrawler
         }
     }
 
-    private static async Task<string?> FetchHtmlAsync(HttpClient client, string url, CancellationToken ct)
+    private static IEnumerable<string> ExtractLinks(Stream html, Uri rootUri, string currentUrl)
     {
-        try
-        {
-            var response = await client.GetAsync(url, ct);
-            response.EnsureSuccessStatusCode();
-            var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
-            if (!contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
-                return null;
-            return await response.Content.ReadAsStringAsync(ct);
-        }
-        catch
-        {
-            return null;
-        }
-    }
+        var doc = new HtmlDocument();
+        doc.Load(html);
 
-    private static string ExtractText(HtmlDocument doc)
-    {
-        // Remove script, style, nav, footer, header nodes
-        var nodesToRemove = doc.DocumentNode.SelectNodes(
-            "//script|//style|//nav|//footer|//header|//aside|//noscript|//iframe");
-        if (nodesToRemove is not null)
-            foreach (var node in nodesToRemove.ToList())
-                node.Remove();
-
-        var textNodes = doc.DocumentNode.SelectNodes("//body//text()");
-        if (textNodes is null) return string.Empty;
-
-        var parts = textNodes
-            .Select(n => HtmlEntity.DeEntitize(n.InnerText).Trim())
-            .Where(t => t.Length > 0);
-
-        return string.Join(" ", parts);
-    }
-
-    private static IEnumerable<string> ExtractLinks(HtmlDocument doc, Uri rootUri, string currentUrl)
-    {
         var anchors = doc.DocumentNode.SelectNodes("//a[@href]");
         if (anchors is null) yield break;
 
@@ -110,7 +98,6 @@ public class WebCrawler(IHttpClientFactory httpClientFactory, ILogger<WebCrawler
             if (absoluteUri.Host != rootUri.Host) continue;
             if (absoluteUri.Scheme is not "http" and not "https") continue;
 
-            // Strip fragment and query for deduplication
             var clean = new UriBuilder(absoluteUri) { Fragment = "", Query = "" }.Uri.ToString().TrimEnd('/');
             yield return clean;
         }

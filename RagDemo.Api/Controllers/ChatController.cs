@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using RagDemo.Core.Interfaces;
+using RagDemo.Core.Models;
 
 namespace RagDemo.Api.Controllers;
 
@@ -23,17 +24,21 @@ public class ChatController(IRagPipelineService pipeline, ILogger<ChatController
         Response.Headers.CacheControl = "no-cache";
         Response.Headers.Connection = "keep-alive";
 
+        var fullReply = new StringBuilder();
+
         try
         {
-            await foreach (var token in pipeline.ChatAsync(request.SessionId, request.Question, cancellationToken))
+            await foreach (var token in pipeline.ChatAsync(request.SessionId, request.Question, request.History, cancellationToken))
             {
+                fullReply.Append(token);
                 var json = JsonSerializer.Serialize(new { token });
                 await Response.WriteAsync($"data: {json}\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
             }
 
-            // Signal completion
-            await Response.WriteAsync("data: [DONE]\n\n", CancellationToken.None);
+            // Send the complete reply so the frontend can append it to conversation history
+            var doneJson = JsonSerializer.Serialize(new { done = true, reply = fullReply.ToString() });
+            await Response.WriteAsync($"data: {doneJson}\n\n", CancellationToken.None);
             await Response.Body.FlushAsync(CancellationToken.None);
         }
         catch (OperationCanceledException)
@@ -49,5 +54,5 @@ public class ChatController(IRagPipelineService pipeline, ILogger<ChatController
         }
     }
 
-    public record ChatRequest(string SessionId, string Question);
+    public record ChatRequest(string SessionId, string Question, IReadOnlyList<ConversationMessage>? History = null);
 }

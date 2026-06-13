@@ -13,6 +13,11 @@ public class TextChunker : ITextChunker
     private static readonly int ChunkSize = TargetTokens * CharsPerToken;
     private static readonly int OverlapSize = OverlapTokens * CharsPerToken;
 
+    private static readonly HashSet<string> Abbreviations = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "vs", "etc", "eg", "ie", "fig", "approx"
+    };
+
     public IEnumerable<TextChunk> Chunk(string text, string sourceUrl)
     {
         if (string.IsNullOrWhiteSpace(text)) yield break;
@@ -38,25 +43,35 @@ public class TextChunker : ITextChunker
             if (!string.IsNullOrWhiteSpace(chunkText))
                 yield return new TextChunk(chunkText, sourceUrl, chunkIndex++);
 
-            // Step forward by chunk size minus overlap
-            index += ChunkSize - OverlapSize;
+            // Step from actual end to preserve consistent overlap
+            index = end - OverlapSize;
         }
     }
 
     private static int FindSentenceBoundary(string text, int nearIndex)
     {
-        // Look forward up to 200 chars for a sentence-ending punctuation followed by whitespace
         var limit = Math.Min(nearIndex + 200, text.Length);
         for (var i = nearIndex; i < limit; i++)
         {
-            if (text[i] is '.' or '!' or '?' && (i + 1 >= text.Length || char.IsWhiteSpace(text[i + 1])))
-                return i + 1;
+            if (text[i] is not ('.' or '!' or '?')) continue;
+            if (i + 1 >= text.Length || !char.IsWhiteSpace(text[i + 1])) continue;
+
+            // Guard abbreviations — get the word preceding the punctuation
+            var wordStart = i - 1;
+            while (wordStart > 0 && char.IsLetter(text[wordStart - 1])) wordStart--;
+            var word = text[wordStart..i];
+            if (Abbreviations.Contains(word)) continue;
+
+            // Next non-whitespace should be uppercase or a digit
+            var nextChar = i + 2 < text.Length ? text[i + 2] : '\0';
+            if (!char.IsUpper(nextChar) && !char.IsDigit(nextChar)) continue;
+
+            return i + 1;
         }
         // Fall back: nearest whitespace
         for (var i = nearIndex; i > nearIndex - 100 && i >= 0; i--)
         {
-            if (char.IsWhiteSpace(text[i]))
-                return i;
+            if (char.IsWhiteSpace(text[i])) return i;
         }
         return nearIndex;
     }

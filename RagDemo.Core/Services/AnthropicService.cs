@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -13,8 +12,8 @@ namespace RagDemo.Core.Services;
 public class AnthropicOptions
 {
     public string ApiKey { get; set; } = "";
-    public string Model { get; set; } = "claude-sonnet-4-20250514";
-    public int MaxTokens { get; set; } = 1024;
+    public string Model { get; set; } = "claude-sonnet-4-6";
+    public int MaxTokens { get; set; } = 4096;
 }
 
 public class AnthropicService(
@@ -31,10 +30,19 @@ public class AnthropicService(
     public async IAsyncEnumerable<string> StreamAnswerAsync(
         string question,
         IReadOnlyList<SearchResult> context,
+        IReadOnlyList<ConversationMessage>? history = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var systemPrompt = BuildSystemPrompt(context);
         var client = httpClientFactory.CreateClient("anthropic");
+
+        var messages = new List<object>();
+        if (history is not null)
+        {
+            foreach (var msg in history)
+                messages.Add(new { role = msg.Role, content = msg.Content });
+        }
+        messages.Add(new { role = "user", content = question });
 
         var requestBody = new
         {
@@ -42,10 +50,7 @@ public class AnthropicService(
             max_tokens = options.Value.MaxTokens,
             stream = true,
             system = systemPrompt,
-            messages = new[]
-            {
-                new { role = "user", content = question }
-            }
+            messages
         };
 
         var requestJson = JsonSerializer.Serialize(requestBody, JsonOpts);
@@ -64,11 +69,9 @@ public class AnthropicService(
         while (!cancellationToken.IsCancellationRequested &&
                (line = await reader.ReadLineAsync(cancellationToken)) is not null)
         {
-            if (line is null) break;
             if (!line.StartsWith("data: ")) continue;
 
             var data = line["data: ".Length..];
-            if (data == "[DONE]") break;
 
             StreamEvent? evt;
             try
@@ -81,6 +84,8 @@ public class AnthropicService(
                 continue;
             }
 
+            if (evt?.Type == "message_stop") break;
+
             if (evt?.Type == "content_block_delta" && evt.Delta?.Type == "text_delta")
                 yield return evt.Delta.Text ?? "";
         }
@@ -89,16 +94,23 @@ public class AnthropicService(
     private static string BuildSystemPrompt(IReadOnlyList<SearchResult> context)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are a helpful assistant. Answer the user's question based solely on the provided context excerpts.");
-        sb.AppendLine("If the context does not contain enough information to answer, say so clearly.");
+        sb.AppendLine("You are a helpful assistant. Answer the user's question using only the context below.");
+        sb.AppendLine("Chunks are ordered by relevance score (higher = more relevant).");
         sb.AppendLine("Cite the source URL when referencing specific information.");
+        sb.AppendLine("If the context does not contain enough information to answer, say so clearly — do not guess.");
         sb.AppendLine();
-        sb.AppendLine("CONTEXT:");
 
+        if (context.Count == 0)
+        {
+            sb.AppendLine("CONTEXT: No relevant content was found for this question.");
+            return sb.ToString();
+        }
+
+        sb.AppendLine("CONTEXT:");
         for (var i = 0; i < context.Count; i++)
         {
             var r = context[i];
-            sb.AppendLine($"[{i + 1}] Source: {r.SourceUrl}");
+            sb.AppendLine($"[{i + 1}] Score: {r.Score:F2} — Source: {r.SourceUrl}");
             sb.AppendLine(r.Text);
             sb.AppendLine();
         }
