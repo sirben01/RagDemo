@@ -72,7 +72,7 @@ function App() {
           <UrlIngest sessionId={sessionId} onIngestComplete={handleIngestComplete} />
         </div>
         <div className="flex-1">
-          <ChatWindow sessionId={sessionId} isReady={ingestDone} />
+          <ChatWindow key={sessionId} sessionId={sessionId} isReady={ingestDone} />
         </div>
       </main>
     </div>

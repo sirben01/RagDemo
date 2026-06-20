@@ -10,12 +10,13 @@ public class PdfContentExtractor : IContentExtractor
         contentType == "application/pdf" ||
         url.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
 
-    public Task<string> ExtractTextAsync(Stream content, string url, CancellationToken ct = default)
+    public async Task<string> ExtractTextAsync(Stream content, string url, CancellationToken ct = default)
     {
         using var ms = new MemoryStream();
-        content.CopyTo(ms);
+        await content.CopyToAsync(ms, ct);
+        ms.Position = 0;
 
-        using var pdf = PdfDocument.Open(ms.ToArray());
+        using var pdf = PdfDocument.Open(ms);
         var sb = new StringBuilder();
 
         foreach (var page in pdf.GetPages())
@@ -24,6 +25,6 @@ public class PdfContentExtractor : IContentExtractor
             sb.AppendLine(pageText);
         }
 
-        return Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 }

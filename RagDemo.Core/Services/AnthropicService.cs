@@ -40,7 +40,7 @@ public class AnthropicService(
         if (history is not null)
         {
             foreach (var msg in history)
-                messages.Add(new { role = msg.Role, content = msg.Content });
+                messages.Add(new { role = msg.Role?.ToLowerInvariant(), content = msg.Content });
         }
         messages.Add(new { role = "user", content = question });
 
@@ -59,7 +59,7 @@ public class AnthropicService(
             Content = new StringContent(requestJson, Encoding.UTF8, "application/json")
         };
 
-        var response = await client.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await client.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);

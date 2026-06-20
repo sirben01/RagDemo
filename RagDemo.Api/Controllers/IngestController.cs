@@ -9,6 +9,8 @@ namespace RagDemo.Api.Controllers;
 [Route("api/[controller]")]
 public class IngestController(IRagPipelineService pipeline, ILogger<IngestController> logger) : ControllerBase
 {
+    private static readonly JsonSerializerOptions CamelCase = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
     [HttpPost]
     public async Task IngestAsync([FromBody] IngestRequest request, CancellationToken cancellationToken)
     {
@@ -27,7 +29,7 @@ public class IngestController(IRagPipelineService pipeline, ILogger<IngestContro
         {
             await foreach (var progress in pipeline.IngestAsync(request.Url, request.SessionId, request.MaxPages, cancellationToken))
             {
-                var json = JsonSerializer.Serialize(progress, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                var json = JsonSerializer.Serialize(progress, CamelCase);
                 await Response.WriteAsync($"data: {json}\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
             }
@@ -39,7 +41,7 @@ public class IngestController(IRagPipelineService pipeline, ILogger<IngestContro
         catch (Exception ex)
         {
             logger.LogError(ex, "Ingest error for session {SessionId}", request.SessionId);
-            var error = JsonSerializer.Serialize(new { stage = "error", message = ex.Message, isComplete = true });
+            var error = JsonSerializer.Serialize(new { stage = "error", message = ex.Message, isComplete = true, error = ex.Message }, CamelCase);
             await Response.WriteAsync($"data: {error}\n\n", Encoding.UTF8, CancellationToken.None);
             await Response.Body.FlushAsync(CancellationToken.None);
         }

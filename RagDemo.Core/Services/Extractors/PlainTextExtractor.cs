@@ -19,13 +19,15 @@ public class PlainTextExtractor : IContentExtractor
         return PlainExtensions.Contains(Path.GetExtension(url));
     }
 
+    private static readonly Regex MarkdownSyntax = new(@"[#*`_~\[\]()>]", RegexOptions.Compiled);
+
     public async Task<string> ExtractTextAsync(Stream content, string url, CancellationToken ct = default)
     {
         using var reader = new StreamReader(content);
         var raw = await reader.ReadToEndAsync(ct);
 
         // Strip Markdown syntax characters for cleaner embedding
-        raw = Regex.Replace(raw, @"[#*`_~\[\]()>]", " ");
+        raw = MarkdownSyntax.Replace(raw, " ");
         return string.Join(" ", raw.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries));
     }
 }

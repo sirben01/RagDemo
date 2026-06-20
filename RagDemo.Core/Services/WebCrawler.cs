@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using RagDemo.Core.Interfaces;
 using RagDemo.Core.Models;
@@ -25,8 +24,10 @@ public class WebCrawler(
         queue.Enqueue((rootUrl, 0));
 
         var client = httpClientFactory.CreateClient("crawler");
+        var successCount = 0;
 
-        while (queue.Count > 0 && visited.Count < maxPages && !cancellationToken.IsCancellationRequested)
+        // Guard on pages-with-content, not attempted URLs; visited is unbounded for dedup only
+        while (queue.Count > 0 && successCount < maxPages && !cancellationToken.IsCancellationRequested)
         {
             var (url, depth) = queue.Dequeue();
 
@@ -35,7 +36,7 @@ public class WebCrawler(
             CrawledPage? page = null;
             try
             {
-                var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 if (!response.IsSuccessStatusCode)
                 {
                     logger.LogDebug("Non-success status {Status} for {Url}", response.StatusCode, url);
@@ -51,25 +52,34 @@ public class WebCrawler(
                     continue;
                 }
 
-                // Buffer content so we can use it for both extraction and link-following
                 var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
 
-                using var extractStream = new MemoryStream(bytes);
-                var text = await extractor.ExtractTextAsync(extractStream, url, cancellationToken);
-
-                if (!string.IsNullOrWhiteSpace(text))
-                    page = new CrawledPage(url, text, DateTime.UtcNow);
-
-                // Only follow links from HTML pages
-                if (extractor is HtmlContentExtractor && depth < MaxDepth)
+                if (extractor is HtmlContentExtractor htmlExtractor)
                 {
-                    using var linkStream = new MemoryStream(bytes);
-                    foreach (var link in ExtractLinks(linkStream, rootUri, url))
+                    // Single DOM parse yields both text and outbound links
+                    var (text, links) = htmlExtractor.ExtractTextAndLinks(bytes, rootUri, url);
+
+                    if (!string.IsNullOrWhiteSpace(text))
+                        page = new CrawledPage(url, text, DateTime.UtcNow);
+
+                    if (depth < MaxDepth)
                     {
-                        if (!visited.Contains(link))
-                            queue.Enqueue((link, depth + 1));
+                        foreach (var link in links)
+                            if (!visited.Contains(link))
+                                queue.Enqueue((link, depth + 1));
                     }
                 }
+                else
+                {
+                    using var extractStream = new MemoryStream(bytes);
+                    var text = await extractor.ExtractTextAsync(extractStream, url, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(text))
+                        page = new CrawledPage(url, text, DateTime.UtcNow);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -77,29 +87,10 @@ public class WebCrawler(
             }
 
             if (page is not null)
+            {
+                successCount++;
                 yield return page;
-        }
-    }
-
-    private static IEnumerable<string> ExtractLinks(Stream html, Uri rootUri, string currentUrl)
-    {
-        var doc = new HtmlDocument();
-        doc.Load(html);
-
-        var anchors = doc.DocumentNode.SelectNodes("//a[@href]");
-        if (anchors is null) yield break;
-
-        foreach (var anchor in anchors)
-        {
-            var href = anchor.GetAttributeValue("href", "");
-            if (string.IsNullOrWhiteSpace(href) || href.StartsWith('#')) continue;
-
-            if (!Uri.TryCreate(new Uri(currentUrl), href, out var absoluteUri)) continue;
-            if (absoluteUri.Host != rootUri.Host) continue;
-            if (absoluteUri.Scheme is not "http" and not "https") continue;
-
-            var clean = new UriBuilder(absoluteUri) { Fragment = "", Query = "" }.Uri.ToString().TrimEnd('/');
-            yield return clean;
+            }
         }
     }
 }

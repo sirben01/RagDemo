@@ -23,6 +23,10 @@ export default function ChatWindow({ sessionId, isReady }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  useEffect(() => {
+    return () => { abortRef.current?.abort() }
+  }, [])
+
   async function sendMessage() {
     const question = input.trim()
     if (!question || isLoading) return
@@ -37,10 +41,11 @@ export default function ChatWindow({ sessionId, isReady }: Props) {
     abortRef.current = new AbortController()
 
     try {
+      const history = messages.map(({ role, content }) => ({ role, content }))
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, question }),
+        body: JSON.stringify({ sessionId, question, history }),
         signal: abortRef.current.signal
       })
 
@@ -49,8 +54,9 @@ export default function ChatWindow({ sessionId, isReady }: Props) {
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let streamDone = false
 
-      while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read()
         if (done) break
 
@@ -61,10 +67,22 @@ export default function ChatWindow({ sessionId, isReady }: Props) {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
           const data = line.slice(6).trim()
-          if (data === '[DONE]') break
 
           try {
             const evt = JSON.parse(data)
+            if (evt.done) {
+              streamDone = true
+              break
+            }
+            if (evt.error) {
+              setMessages(prev => {
+                const updated = [...prev]
+                updated[assistantIndex] = { role: 'assistant', content: `Error: ${evt.error}`, isStreaming: false }
+                return updated
+              })
+              streamDone = true
+              break
+            }
             if (evt.token) {
               setMessages(prev => {
                 const updated = [...prev]

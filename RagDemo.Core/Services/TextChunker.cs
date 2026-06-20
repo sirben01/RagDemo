@@ -43,8 +43,10 @@ public class TextChunker : ITextChunker
             if (!string.IsNullOrWhiteSpace(chunkText))
                 yield return new TextChunk(chunkText, sourceUrl, chunkIndex++);
 
-            // Step from actual end to preserve consistent overlap
-            index = end - OverlapSize;
+            // When we've consumed to the end, stop — otherwise overlap would re-enter this window
+            if (end >= text.Length) break;
+
+            index = Math.Max(0, end - OverlapSize);
         }
     }
 
@@ -62,8 +64,10 @@ public class TextChunker : ITextChunker
             var word = text[wordStart..i];
             if (Abbreviations.Contains(word)) continue;
 
-            // Next non-whitespace should be uppercase or a digit
-            var nextChar = i + 2 < text.Length ? text[i + 2] : '\0';
+            // Scan past all whitespace to find the first non-whitespace char (handles double-spaces)
+            var j = i + 1;
+            while (j < text.Length && char.IsWhiteSpace(text[j])) j++;
+            var nextChar = j < text.Length ? text[j] : '\0';
             if (!char.IsUpper(nextChar) && !char.IsDigit(nextChar)) continue;
 
             return i + 1;
