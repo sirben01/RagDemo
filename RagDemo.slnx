@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="RagDemo.Api/RagDemo.Api.csproj" />
   <Project Path="RagDemo.Core/RagDemo.Core.csproj" />
+  <Project Path="RagDemo.Tests/RagDemo.Tests.csproj" />
 </Solution>
